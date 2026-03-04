@@ -162,6 +162,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pingouin" },
     { name = "scikit-learn" },
+    { name = "scikit-posthocs" },
     { name = "scipy" },
     { name = "seaborn" },
     { name = "statsmodels" },
@@ -175,6 +176,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=3.0.1" },
     { name = "pingouin", specifier = ">=0.6.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
+    { name = "scikit-posthocs", specifier = ">=0.12.0" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "statsmodels", specifier = ">=0.14.6" },
@@ -660,6 +662,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/36/4d/4a67f30778a45d542bbea5db2dbfa1e9e100bf9ba64aefe34215ba9f11f6/scikit_learn-1.8.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ada8121bcb4dac28d930febc791a69f7cb1673c8495e5eee274190b73a4559c1", size = 9103788, upload-time = "2025-12-10T07:07:45.982Z" },
     { url = "https://files.pythonhosted.org/packages/89/3c/45c352094cfa60050bcbb967b1faf246b22e93cb459f2f907b600f2ceda5/scikit_learn-1.8.0-cp311-cp311-win_amd64.whl", hash = "sha256:c57b1b610bd1f40ba43970e11ce62821c2e6569e4d74023db19c6b26f246cb3b", size = 8081706, upload-time = "2025-12-10T07:07:48.111Z" },
     { url = "https://files.pythonhosted.org/packages/3d/46/5416595bb395757f754feb20c3d776553a386b661658fb21b7c814e89efe/scikit_learn-1.8.0-cp311-cp311-win_arm64.whl", hash = "sha256:2838551e011a64e3053ad7618dda9310175f7515f1742fa2d756f7c874c05961", size = 7688451, upload-time = "2025-12-10T07:07:49.873Z" },
+]
+
+[[package]]
+name = "scikit-posthocs"
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "scipy" },
+    { name = "seaborn" },
+    { name = "statsmodels" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e6/87/ecbf4685fe4199755fda6377de95a2c9700c390faf5f18c1b1e638d6772a/scikit_posthocs-0.12.0.tar.gz", hash = "sha256:6826fe2729aa09921285f56fa73fb6b15ec59b2e762b7e20a1a9f2b765b81562", size = 40231, upload-time = "2026-02-11T20:42:13.607Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/78/488f8491e0b95345712698eec4b95000c69b04818bacc211f09d54a4f6e5/scikit_posthocs-0.12.0-py3-none-any.whl", hash = "sha256:f957f91ce5c2a39924d7b0e319fe834d64b01108ea8ad6c588546560444b51db", size = 36578, upload-time = "2026-02-11T20:42:12.665Z" },
 ]
 
 [[package]]
