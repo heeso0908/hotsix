@@ -124,11 +124,11 @@ brew install libomp
 
 - Shot 단위 **평균값**만 존재 → 사출 순간의 시계열 파형 데이터 부재
 - 금형 마모도, 원재료 로트 등 **외부 변수 누락**
-- Product_Type 통합 모델로 제품 유형별 특성 희석 가능성
+
 
 ### 개선 방향
 
-- Product_Type별 분리 모델 구축
+- 공정 최적화 시스템(Process Optimization System)
 - 시계열 파형 데이터 수집 후 LSTM / 1D-CNN 적용
 - 실시간 OPC UA 연동 경보 시스템 구축
 
