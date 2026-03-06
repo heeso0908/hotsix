@@ -1,9 +1,4 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[34]:
-
-
+# ----- Cell 0 -----
 from sklearn.model_selection import train_test_split, StratifiedKFold, RandomizedSearchCV
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -24,10 +19,7 @@ SEED = 42
 np.random.seed(SEED)
 print("✅ 모델링 라이브러리 로드 완료")
 
-
-# In[35]:
-
-
+# ----- Cell 1 -----
 if platform.system() == 'Windows':
     plt.rcParams['font.family'] = 'Malgun Gothic'
 elif platform.system() == 'Darwin':
@@ -64,14 +56,7 @@ y = type1_df['Defect_Status'].copy()
 print(f"피처 수: {len(FEATURES)}개 (원본 21 + 신규 파생변수 {len(NEW_DERIVED)}개)")
 print(f"타겟 분포 → 양품: {(y==0).sum()} / 불량: {(y==1).sum()} ({y.mean()*100:.1f}%)")
 
-
-# ## STEP 1. 피처 및 타겟 정의
-
-# ## STEP 2. Train/Test Split
-
-# In[36]:
-
-
+# ----- Cell 4 -----
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, stratify=y, random_state=SEED)
 
@@ -81,10 +66,7 @@ print(f"훈련셋: {X_train.shape[0]}행  |  테스트셋: {X_test.shape[0]}행"
 print(f"훈련셋 불량률: {y_train.mean()*100:.1f}%  |  테스트셋 불량률: {y_test.mean()*100:.1f}%")
 print(f"scale_pos_weight: {pos_weight:.2f}")
 
-
-# In[37]:
-
-
+# ----- Cell 5 -----
 from sklearn.ensemble import IsolationForest
 
 # 수치형 컬럼만 선택
@@ -104,12 +86,7 @@ y_train_iso = y_train[train_anomaly == 1]
 print(f"\nIsolation Forest 후 훈련셋: {X_train_iso.shape[0]}행")
 print(f"불량률: {y_train_iso.mean()*100:.1f}%")
 
-
-# ## STEP 3. 베이스라인 모델 비교
-
-# In[38]:
-
-
+# ----- Cell 7 -----
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
@@ -223,24 +200,114 @@ for name, model in baseline_models.items():
 result_df = pd.DataFrame(baseline_results).sort_values('F1-Score', ascending=False)
 display(result_df)
 
+# ----- Cell 9 -----
+from imblearn.over_sampling import SMOTE
+import warnings
+warnings.filterwarnings('ignore')
 
-# ## STEP 4. 하이퍼파라미터 튜닝 → SMOTE 적용 여부 결정 → 최종 모델 선정
-# 
-# > **흐름**: 튜닝(원본 데이터) → SMOTE strategy별 실험(튜닝 파라미터 고정) → 비교 → 최종 선정
+# ※ 이중 보정 방지 원칙
+#   - No SMOTE → class_weight/scale_pos_weight 사용 (불균형 보정 필요)
+#   - SMOTE 적용 → class_weight 제거 (SMOTE가 이미 보정, 중복 시 과보정)
 
-# In[39]:
+strategies_exp = [None, 0.3, 0.5, 0.7, 1.0]   # None = No SMOTE
+smote_exp_results = []
 
+for strategy in strategies_exp:
+    if strategy is None:
+        X_tr_s, y_tr_s = X_train.copy(), y_train.copy()
+        label = 'No SMOTE'
+        # 불균형 보정: class_weight / scale_pos_weight 사용
+        rf_t  = RandomForestClassifier(
+            n_estimators=200, class_weight='balanced', random_state=SEED, n_jobs=-1)
+        xgb_t = xgb.XGBClassifier(
+            scale_pos_weight=pos_weight, n_estimators=200,
+            random_state=SEED, eval_metric='logloss', verbosity=0)
+        lgb_t = lgb.LGBMClassifier(
+            n_estimators=500, learning_rate=0.05, num_leaves=63,
+            scale_pos_weight=pos_weight, random_state=SEED, verbose=-1)
+    else:
+        sm = SMOTE(sampling_strategy=strategy, random_state=SEED)
+        X_tr_s, y_tr_s = sm.fit_resample(X_train, y_train)
+        label = f'SMOTE {strategy}'
+        # SMOTE가 불균형 보정 → class_weight 제거 (이중 보정 방지)
+        rf_t  = RandomForestClassifier(
+            n_estimators=200, random_state=SEED, n_jobs=-1)
+        xgb_t = xgb.XGBClassifier(
+            n_estimators=200, random_state=SEED, eval_metric='logloss', verbosity=0)
+        lgb_t = lgb.LGBMClassifier(
+            n_estimators=500, learning_rate=0.05, num_leaves=63,
+            random_state=SEED, verbose=-1)
 
+    n_pos = int((y_tr_s == 1).sum())
+    X_tr_s_xgb = pd.get_dummies(X_tr_s).reindex(columns=X_train_xgb.columns, fill_value=0)
+
+    for name, model_t, X_tr_use, X_te_use in [
+        ('Random Forest', rf_t,  X_tr_s,     X_test),
+        ('XGBoost',       xgb_t, X_tr_s_xgb, X_test_xgb),
+        ('LightGBM',      lgb_t, X_tr_s,     X_test),
+    ]:
+        m = model_t.__class__(**model_t.get_params())
+        m.fit(X_tr_use, y_tr_s)
+        yp = m.predict_proba(X_te_use)[:, 1]
+        thr, r, p, f1, ok = find_best_threshold_constrained(y_test, yp)
+        auc = roc_auc_score(y_test, yp)
+        smote_exp_results.append({
+            'SMOTE': label, '불량수': n_pos, '모델': name,
+            '임계값(탐색용)': round(thr, 2),
+            'Recall': round(r, 4), 'Precision': round(p, 4),
+            'F1-Score': round(f1, 4), 'ROC-AUC': round(auc, 4),
+            'Recall≥0.80': '✅' if ok else '❌'
+        })
+
+smote_exp_df = pd.DataFrame(smote_exp_results)
+
+print("[ SMOTE strategy별 비교 (baseline 파라미터, 탐색 목적) ]")
+for strategy in strategies_exp:
+    label = 'No SMOTE' if strategy is None else f'SMOTE {strategy}'
+    sub = smote_exp_df[smote_exp_df['SMOTE'] == label]
+    n_pos_s = sub['불량수'].iloc[0]
+    print(f"\n▶ {label}  (불량수: {n_pos_s}건)")
+    display(sub.drop(columns=['SMOTE', '불량수']).sort_values('F1-Score', ascending=False).reset_index(drop=True))
+
+# ── strategy별 최고 F1 요약 (Recall≥0.80 우선)
+summary = (
+    smote_exp_df[smote_exp_df['Recall≥0.80'] == '✅']
+    .groupby('SMOTE')['F1-Score'].max()
+    .sort_values(ascending=False)
+)
+print("\n[ strategy별 최고 F1 요약 ]")
+print(summary.to_string())
+print(f"\n→ 권장 선택: {summary.index[0]}")
+
+# ----- Cell 10 -----
 from sklearn.model_selection import RandomizedSearchCV
 
-# 튜닝은 원본 데이터로 (SMOTE 없음)
-X_train_sm, y_train_sm = X_train, y_train
-X_train_sm_xgb = pd.get_dummies(X_train_sm).reindex(columns=X_train_xgb.columns, fill_value=0)
-print(f"양품: {(y_train_sm==0).sum()} / 불량: {(y_train_sm==1).sum()}")
+# ── SMOTE 여부 수동 결정
+# 위 실험 결과를 보고 직접 선택:
+#   None     → No SMOTE (Recall 최우선)
+#   0.3, 0.5, 0.7, 1.0 → SMOTE strategy (F1/AUC 균형)
+chosen_strategy = None   # ← 여기서 선택
 
-# -------------------------------------------
-# 1. Random Forest
-# -------------------------------------------
+chosen_label = 'No SMOTE' if chosen_strategy is None else f'SMOTE {chosen_strategy}'
+
+if chosen_strategy is None:
+    X_train_final, y_train_final = X_train.copy(), y_train.copy()
+    # 불균형 보정: class_weight / scale_pos_weight 사용
+    rf_cw, xgb_spw, lgb_spw = 'balanced', pos_weight, pos_weight
+else:
+    sm_final = SMOTE(sampling_strategy=chosen_strategy, random_state=SEED)
+    X_train_final, y_train_final = sm_final.fit_resample(X_train, y_train)
+    # SMOTE가 보정 → class_weight 제거 (이중 보정 방지)
+    rf_cw, xgb_spw, lgb_spw = None, 1.0, 1.0
+
+X_train_final_xgb = pd.get_dummies(X_train_final).reindex(columns=X_train_xgb.columns, fill_value=0)
+print(f"✅ 선택된 SMOTE: {chosen_label}")
+print(f"   학습 데이터 → 양품: {(y_train_final==0).sum()} / 불량: {(y_train_final==1).sum()}")
+print(f"   class_weight(RF): {rf_cw} | scale_pos_weight(XGB/LGB): {round(xgb_spw, 2)}")
+
+# ── HP 튜닝 (결정된 데이터, ROC-AUC 기준 — 임계값 독립적 지표)
+print("\n[ 하이퍼파라미터 튜닝 중 (scoring=roc_auc) ... ]")
+
 rf_param = {
     'n_estimators':      [200, 300, 500],
     'max_depth':         [None, 10, 20, 30],
@@ -249,16 +316,13 @@ rf_param = {
     'max_features':      ['sqrt', 'log2'],
 }
 rf_search = RandomizedSearchCV(
-    RandomForestClassifier(class_weight='balanced', random_state=SEED, n_jobs=-1),
-    rf_param, n_iter=30, scoring='f1', cv=5, random_state=SEED, n_jobs=-1
+    RandomForestClassifier(class_weight=rf_cw, random_state=SEED, n_jobs=-1),
+    rf_param, n_iter=30, scoring='roc_auc', cv=5, random_state=SEED, n_jobs=-1
 )
-rf_search.fit(X_train_sm, y_train_sm)
+rf_search.fit(X_train_final, y_train_final)
 best_rf = rf_search.best_estimator_
-print(f"RF 최적: {rf_search.best_params_}")
+print(f"RF  최적: {rf_search.best_params_}")
 
-# -------------------------------------------
-# 2. XGBoost
-# -------------------------------------------
 xgb_param = {
     'n_estimators':     [200, 300, 500],
     'max_depth':        [3, 5, 7],
@@ -267,17 +331,14 @@ xgb_param = {
     'colsample_bytree': [0.7, 0.8, 1.0],
 }
 xgb_search = RandomizedSearchCV(
-    xgb.XGBClassifier(scale_pos_weight=pos_weight, random_state=SEED,
+    xgb.XGBClassifier(scale_pos_weight=xgb_spw, random_state=SEED,
                       eval_metric='logloss', verbosity=0),
-    xgb_param, n_iter=30, scoring='f1', cv=5, random_state=SEED, n_jobs=-1
+    xgb_param, n_iter=30, scoring='roc_auc', cv=5, random_state=SEED, n_jobs=-1
 )
-xgb_search.fit(X_train_sm_xgb, y_train_sm)
+xgb_search.fit(X_train_final_xgb, y_train_final)
 best_xgb = xgb_search.best_estimator_
 print(f"XGB 최적: {xgb_search.best_params_}")
 
-# -------------------------------------------
-# 3. LightGBM
-# -------------------------------------------
 lgb_param = {
     'n_estimators':  [300, 500, 700],
     'max_depth':     [5, 7, 10],
@@ -286,29 +347,32 @@ lgb_param = {
     'subsample':     [0.7, 0.8, 1.0],
 }
 lgb_search = RandomizedSearchCV(
-    lgb.LGBMClassifier(scale_pos_weight=pos_weight, random_state=SEED, verbose=-1),
-    lgb_param, n_iter=30, scoring='f1', cv=5, random_state=SEED, n_jobs=-1
+    lgb.LGBMClassifier(scale_pos_weight=lgb_spw, random_state=SEED, verbose=-1),
+    lgb_param, n_iter=30, scoring='roc_auc', cv=5, random_state=SEED, n_jobs=-1
 )
-lgb_search.fit(X_train_sm, y_train_sm)
+lgb_search.fit(X_train_final, y_train_final)
 best_lgb = lgb_search.best_estimator_
 print(f"LGB 최적: {lgb_search.best_params_}")
 
-# -------------------------------------------
-# 결과 비교 (OOF 임계값 — test 정보 불사용)
-# -------------------------------------------
-print("\n[ OOF 임계값 계산 중 (5-Fold × 3모델) ... ]")
-oof_thresholds = {}   # 이후 셀에서 재사용
+# ── OOF 임계값 탐색 (결정된 SMOTE 설정 반영)
+print("\n[ OOF 임계값 탐색 중 (5-Fold × 3모델) ... ]")
+oof_thresholds = {}
+tuned_results  = []
 
-tuned_results = []
 for name, model, X_te in [
     ('Random Forest', best_rf,  X_test),
     ('XGBoost',       best_xgb, X_test_xgb),
     ('LightGBM',      best_lgb, X_test),
 ]:
     xgb_cols = X_train_xgb.columns if name == 'XGBoost' else None
-    thr = find_threshold_from_oof(model, X_train, y_train, xgb_ref_cols=xgb_cols)
-    oof_thresholds[name] = thr
 
+    if chosen_strategy is None:
+        thr = find_threshold_from_oof(model, X_train_final, y_train_final, xgb_ref_cols=xgb_cols)
+    else:
+        thr = find_threshold_from_oof_smote(
+            model, X_train, y_train, strategy=chosen_strategy, xgb_ref_cols=xgb_cols)
+
+    oof_thresholds[name] = thr
     yp     = model.predict_proba(X_te)[:, 1]
     y_pred = (yp >= thr).astype(int)
     r   = recall_score(y_test, y_pred, zero_division=0)
@@ -317,7 +381,7 @@ for name, model, X_te in [
     auc = roc_auc_score(y_test, yp)
     ok  = r >= 0.80
     tuned_results.append({
-        '모델': name, '임계값(OOF)': round(thr, 2),
+        '모델': name, 'SMOTE': chosen_label, '임계값(OOF)': round(thr, 2),
         'Recall': round(r, 4), 'Precision': round(p, 4),
         'F1-Score': round(f1, 4), 'ROC-AUC': round(auc, 4),
         'Recall≥0.80': '✅' if ok else '❌'
@@ -326,138 +390,18 @@ for name, model, X_te in [
 
 display(pd.DataFrame(tuned_results).sort_values('F1-Score', ascending=False))
 
-
-# In[40]:
-
-
-# -------------------------------------------
-# SMOTE sampling_strategy 비율별 실험
-# 튜닝된 파라미터 고정 → SMOTE 비율만 변경
-# 임계값: 각 폴드 train에만 SMOTE 적용한 OOF로 결정 (누수 없음)
-# -------------------------------------------
-from imblearn.over_sampling import SMOTE
-
-strategies = [0.3, 0.5, 0.7, 1.0]
-smote_results = []
-
-for strategy in strategies:
-    smote_exp = SMOTE(sampling_strategy=strategy, random_state=SEED)
-    X_sm, y_sm = smote_exp.fit_resample(X_train, y_train)
-    n_neg, n_pos = (y_sm == 0).sum(), (y_sm == 1).sum()
-    X_sm_xgb = pd.get_dummies(X_sm).reindex(columns=X_train_xgb.columns, fill_value=0)
-
-    for name, model_templ, X_te_fit in [
-        ('Random Forest', best_rf,  X_test),
-        ('XGBoost',       best_xgb, X_test_xgb),
-        ('LightGBM',      best_lgb, X_test),
-    ]:
-        # OOF 임계값: 각 폴드 train에만 SMOTE 적용 → val은 원본 그대로
-        xgb_cols = X_train_xgb.columns if name == 'XGBoost' else None
-        thr = find_threshold_from_oof_smote(
-            model_templ, X_train, y_train, strategy=strategy, xgb_ref_cols=xgb_cols)
-
-        # 전체 SMOTE 데이터로 재학습 후 test 평가 (고정 임계값 적용)
-        m = model_templ.__class__(**model_templ.get_params())
-        m.fit(X_sm_xgb if name == 'XGBoost' else X_sm, y_sm)
-        yp = m.predict_proba(X_te_fit)[:, 1]
-
-        y_pred = (yp >= thr).astype(int)
-        r   = recall_score(y_test, y_pred, zero_division=0)
-        p   = precision_score(y_test, y_pred, zero_division=0)
-        f1  = f1_score(y_test, y_pred, zero_division=0)
-        auc = roc_auc_score(y_test, yp)
-        ok  = r >= 0.80
-        smote_results.append({
-            'strategy': strategy,
-            '불량수': n_pos,
-            '모델': name,
-            '임계값(OOF)': round(thr, 2),
-            'Recall': round(r, 4),
-            'Precision': round(p, 4),
-            'F1-Score': round(f1, 4),
-            'ROC-AUC': round(auc, 4),
-            'Recall≥0.80': '✅' if ok else '❌'
-        })
-
-smote_df = pd.DataFrame(smote_results)
-
-print("[ SMOTE sampling_strategy 비율별 비교 (튜닝 파라미터 고정, OOF 임계값) ]")
-for s in strategies:
-    sub = smote_df[smote_df['strategy'] == s].drop(columns='strategy')
-    n_pos_s = sub['불량수'].iloc[0]
-    print(f"\n▶ strategy={s}  (불량 목표: ~{n_pos_s}건)")
-    display(sub.drop(columns='불량수').sort_values('F1-Score', ascending=False).reset_index(drop=True))
-
-
-# In[41]:
-
-
-# -------------------------------------------
-# SMOTE 여부 결정 + 최종 모델 선정
-# No SMOTE vs SMOTE 결과 비교 (모두 OOF 임계값 기준)
-# -------------------------------------------
-
-# No SMOTE: ad1fbec6에서 계산한 OOF 임계값 재사용 (중복 계산 없음)
-no_smote_rows = []
-for name, model_ns, X_te_ns in [
-    ('Random Forest', best_rf,  X_test),
-    ('XGBoost',       best_xgb, X_test_xgb),
-    ('LightGBM',      best_lgb, X_test),
-]:
-    thr    = oof_thresholds[name]
-    yp     = model_ns.predict_proba(X_te_ns)[:, 1]
-    y_pred = (yp >= thr).astype(int)
-    r   = recall_score(y_test, y_pred, zero_division=0)
-    p   = precision_score(y_test, y_pred, zero_division=0)
-    f1  = f1_score(y_test, y_pred, zero_division=0)
-    auc = roc_auc_score(y_test, yp)
-    ok  = r >= 0.80
-    no_smote_rows.append({
-        'SMOTE': 'No SMOTE', '모델': name,
-        '임계값(OOF)': round(thr, 2),
-        'Recall': round(r, 4), 'Precision': round(p, 4),
-        'F1-Score': round(f1, 4), 'ROC-AUC': round(auc, 4),
-        'Recall≥0.80': '✅' if ok else '❌'
-    })
-
-# SMOTE: 모델별 최고 F1 strategy 동적 선택 (Recall 조건 우선)
-best_smote_rows = (
-    smote_df[smote_df['Recall≥0.80'] == '✅']
-    .sort_values('F1-Score', ascending=False)
-    .drop_duplicates(subset='모델', keep='first')
-    .copy()
-)
-if best_smote_rows.empty:
-    best_smote_rows = (
-        smote_df.sort_values('F1-Score', ascending=False)
-        .drop_duplicates(subset='모델', keep='first')
-        .copy()
-    )
-
-best_smote_rows['SMOTE'] = best_smote_rows['strategy'].apply(lambda s: f'SMOTE {s}')
-best_smote_rows = best_smote_rows.drop(columns=['strategy', '불량수'])
-
-final_compare = pd.concat([
-    pd.DataFrame(no_smote_rows),
-    best_smote_rows[['SMOTE', '모델', '임계값(OOF)', 'Recall', 'Precision',
-                     'F1-Score', 'ROC-AUC', 'Recall≥0.80']]
-], ignore_index=True)
-
-print("[ 최종 비교: No SMOTE vs SMOTE 최적 strategy (OOF 임계값 기준) ]")
-display(final_compare.sort_values('F1-Score', ascending=False).reset_index(drop=True))
-
-# 최종 결정 (Recall 조건 충족 + F1 최고)
-qualified = final_compare[final_compare['Recall≥0.80'] == '✅']
+# ----- Cell 11 -----
+# ── 최종 모델 선정 (Recall≥0.80 충족 + F1 최고)
+tuned_df  = pd.DataFrame(tuned_results)
+qualified = tuned_df[tuned_df['Recall≥0.80'] == '✅']
 best_row  = qualified.sort_values('F1-Score', ascending=False).iloc[0]
+
+print("[ 최종 모델 선정 ]")
+display(tuned_df.sort_values('F1-Score', ascending=False).reset_index(drop=True))
 print(f"\n✅ 최종 선정: {best_row['모델']} ({best_row['SMOTE']})")
 print(f"   임계값(OOF): {best_row['임계값(OOF)']} | Recall: {best_row['Recall']} | F1: {best_row['F1-Score']} | AUC: {best_row['ROC-AUC']}")
 
-
-# ## STEP 5. 최종 평가-LightGBM
-
-# In[42]:
-
-
+# ----- Cell 13 -----
 # LightGBM 최종 모델 (파생변수 추가 버전)
 # 임계값: OOF로 결정 (ad1fbec6에서 계산, test 정보 불사용)
 opt_thr_lgbm   = oof_thresholds['LightGBM']
@@ -500,12 +444,7 @@ plt.suptitle('최종 모델 평가 — Product_Type 1 (파생변수 추가)',
 plt.tight_layout()
 plt.show()
 
-
-# ## STEP 6. SHAP
-
-# In[43]:
-
-
+# ----- Cell 15 -----
 import shap
 import warnings
 warnings.filterwarnings('ignore')
@@ -517,12 +456,7 @@ shap_values_array = shap_values[1] if isinstance(shap_values, list) else shap_va
 shap.summary_plot(shap_values_array, X_test, plot_type='bar', show=True)
 shap.summary_plot(shap_values_array, X_test, show=True)
 
-
-# ## STEP 7. Isolation Forest + LightGBM 2단계 파이프라인
-
-# In[44]:
-
-
+# ----- Cell 17 -----
 from sklearn.ensemble import IsolationForest
 
 # OOF 임계값 재사용 (ad1fbec6에서 계산됨)
@@ -577,12 +511,7 @@ compare_df = pd.DataFrame([
 ])
 display(compare_df)
 
-
-# ## STEP 8. 캐스케이드 파이프라인 (LightGBM → XGBoost)
-
-# In[45]:
-
-
+# ----- Cell 19 -----
 # =======================================================
 # STEP 8. 캐스케이드 파이프라인
 #
@@ -653,12 +582,7 @@ compare_df = pd.DataFrame([
 ])
 display(compare_df)
 
-
-# ## STEP 9. 불량 유형 다중 분류 (Defect_Type)
-
-# In[46]:
-
-
+# ----- Cell 21 -----
 from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
 from sklearn.preprocessing import LabelEncoder
 
@@ -701,12 +625,7 @@ ax.set_title('혼동 행렬 - 불량 유형 다중 분류', fontweight='bold')
 plt.tight_layout()
 plt.show()
 
-
-# ## STEP 9-1. 불량 유형 다중 분류 — Normal 제외 (불량끼리만)
-
-# In[47]:
-
-
+# ----- Cell 23 -----
 from imblearn.over_sampling import SMOTE
 
 # type1_multi는 바로 위 STEP 9에서 이미 로드됨 (파생변수 추가 버전)
@@ -770,43 +689,11 @@ plt.suptitle('불량 유형 다중 분류 (Normal 제외)', fontsize=13, fontwei
 plt.tight_layout()
 plt.show()
 
-
-# ## STEP 9 결론 — 불량 유형 분류 한계 및 방향 전환
-# 
-# ### 실험 요약
-# 
-# | 실험 | 조건 | macro F1 | 비고 |
-# |------|------|----------|------|
-# | STEP 9 | Normal 포함, 5클래스 | 0.338 | Normal만 F1=0.827, 나머지 0.13~0.39 |
-# | STEP 9-1 (베이스라인) | Normal 제외, 4클래스 | 0.376 | 4클래스 랜덤 기준(0.25) 대비 소폭 상회 |
-# | STEP 9-1 (SMOTE) | Normal 제외 + SMOTE | 0.395 | 최선의 시도, 실용성 없음 |
-# 
-# ### 실패 원인
-# 
-# 1. **절대 샘플 수 부족** — Bubble 58건(훈련셋 46건), 테스트셋 12건으로 어떤 모델도 학습 불가
-# 2. **유형간 공정 패턴 유사** — Exfoliation/Short_Shot/Deformation 모두 비슷한 공정 조건에서 발생, 피처로 구분되는 신호 없음
-# 3. **미수집 변수 영향 가능성** — 불량 유형은 금형 상태, 재료 배치, 작업자 등 공정 수치 외 요인에 의존할 가능성
-# 
-# ### 방향 전환
-# 
-# 불량 유형 분류 대신 아래 두 축으로 목표 재설정:
-# 
-# - **이진 분류 (불량 여부)** — LightGBM, Recall ≥ 0.80 달성 → 실용적 조기 경보 가능
-# - **SHAP 기반 유형 간접 해석** — Type 1 vs Type 2 중요 변수 비교로 불량 발생 메커니즘 차이 분석
-# 
-# > 공정 데이터만으로 불량 유형을 구분하는 것은 현재 데이터셋의 구조적 한계이며,
-# > 불량 탐지 자체의 신뢰도(Recall 0.80 이상)를 확보하는 것이 현실적 목표.
-
-# In[48]:
-
-
+# ----- Cell 25 -----
 #with open('model_type1_lgbm.pkl', 'wb') as f:
     #pickle.dump({'model': best_lgb, 'threshold': float(opt_thr_lgbm), 'features': list(X_train.columns)}, f)
 
-
-# In[49]:
-
-
+# ----- Cell 26 -----
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -866,18 +753,7 @@ print("\n 최적 조건 요약:")
 for var in key_vars:
     print(f"  {var}: {top10[var].mean():.2f} (범위 {top10[var].min():.2f} ~ {top10[var].max():.2f})")
 
-
-# In[ ]:
-
-
-
-
-
-# ## STEP 10. 파생변수 추가 전/후 성능 비교
-
-# In[50]:
-
-
+# ----- Cell 28 -----
 # =======================================================
 # STEP 10. 원본 LightGBM(21피처) vs 파생변수 추가 LightGBM 비교
 # =======================================================
@@ -946,9 +822,6 @@ for feat in NEW_DERIVED:
     rank = all_feats.index(feat) + 1
     print(f"  {rank:2d}위  {feat:<25} {shap_imp[feat]:.4f}")
 
-
-# In[ ]:
-
-
+# ----- Cell 29 -----
 
 
